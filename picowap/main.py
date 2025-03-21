@@ -1,15 +1,15 @@
-from phew import access_point, connect_to_wifi, is_connected_to_wifi, dns, server
-from phew.template import render_template
+from picowap.phew import access_point, connect_to_wifi, is_connected_to_wifi, dns, server
+from picowap.phew.template import render_template
 import json
 import machine
 import os
 import utime
 import _thread
 
-AP_NAME = "pi pico"
-AP_DOMAIN = "pipico.net"
-AP_TEMPLATE_PATH = "ap_templates"
-APP_TEMPLATE_PATH = "app_templates"
+# AP_NAME = "pi pico"
+# AP_DOMAIN = "pipico.net"
+AP_TEMPLATE_PATH = "/picowap/ap_templates"
+APP_TEMPLATE_PATH = "/picowap/app_templates"
 WIFI_FILE = "wifi.json"
 WIFI_MAX_ATTEMPTS = 3
 
@@ -18,12 +18,12 @@ def machine_reset():
     print("Resetting...")
     machine.reset()
 
-def setup_mode():
+def setup_mode(ap_domain, ap_name):
     print("Entering setup mode...")
     
     def ap_index(request):
-        if request.headers.get("host").lower() != AP_DOMAIN.lower():
-            return render_template(f"{AP_TEMPLATE_PATH}/redirect.html", domain = AP_DOMAIN.lower())
+        if request.headers.get("host").lower() != ap_domain.lower():
+            return render_template(f"{AP_TEMPLATE_PATH}/redirect.html", domain = ap_domain.lower())
 
         return render_template(f"{AP_TEMPLATE_PATH}/index.html")
 
@@ -39,8 +39,8 @@ def setup_mode():
         return render_template(f"{AP_TEMPLATE_PATH}/configured.html", ssid = request.form["ssid"])
         
     def ap_catch_all(request):
-        if request.headers.get("host") != AP_DOMAIN:
-            return render_template(f"{AP_TEMPLATE_PATH}/redirect.html", domain = AP_DOMAIN)
+        if request.headers.get("host") != ap_domain:
+            return render_template(f"{AP_TEMPLATE_PATH}/redirect.html", domain = ap_domain)
 
         return "Not found.", 404
 
@@ -48,11 +48,12 @@ def setup_mode():
     server.add_route("/configure", handler = ap_configure, methods = ["POST"])
     server.set_callback(ap_catch_all)
 
-    ap = access_point(AP_NAME)
+    ap = access_point(ap_name)
     ip = ap.ifconfig()[0]
     dns.run_catchall(ip)
+    return server
 
-def application_mode():
+def application_mode(ap_name):
     print("Entering application mode.")
     onboard_led = machine.Pin("LED", machine.Pin.OUT)
 
@@ -81,7 +82,7 @@ def application_mode():
         os.remove(WIFI_FILE)
         # Reboot from new thread after we have responded to the user.
         _thread.start_new_thread(machine_reset, ())
-        return render_template(f"{APP_TEMPLATE_PATH}/reset.html", access_point_ssid = AP_NAME)
+        return render_template(f"{APP_TEMPLATE_PATH}/reset.html", access_point_ssid = ap_name)
 
     def app_catch_all(request):
         return "Not found.", 404
@@ -92,40 +93,48 @@ def application_mode():
     server.add_route("/reset", handler = app_reset, methods = ["GET"])
     # Add other routes for your application...
     server.set_callback(app_catch_all)
+    return server
 
-# Figure out which mode to start up in...
-try:
-    os.stat(WIFI_FILE)
+def check(ap_domain, ap_name, max_attempts = WIFI_MAX_ATTEMPTS):
+    server = None
+    
+    # Figure out which mode to start up in...
+    try:
+        print('checking for config file')
+        os.stat(WIFI_FILE)
 
-    # File was found, attempt to connect to wifi...
-    with open(WIFI_FILE) as f:
-        wifi_current_attempt = 1
-        wifi_credentials = json.load(f)
-        
-        while (wifi_current_attempt < WIFI_MAX_ATTEMPTS):
-            ip_address = connect_to_wifi(wifi_credentials["ssid"], wifi_credentials["password"])
-
-            if is_connected_to_wifi():
-                print(f"Connected to wifi, IP address {ip_address}")
-                break
-            else:
-                wifi_current_attempt += 1
-                
-        if is_connected_to_wifi():
-            application_mode()
-        else:
+        # File was found, attempt to connect to wifi...
+        with open(WIFI_FILE) as f:
+            wifi_current_attempt = 1
+            wifi_credentials = json.load(f)
             
-            # Bad configuration, delete the credentials file, reboot
-            # into setup mode to get new credentials from the user.
-            print("Bad wifi connection!")
-            print(wifi_credentials)
-            os.remove(WIFI_FILE)
-            machine_reset()
+            while (wifi_current_attempt < max_attempts):
+                ip_address = connect_to_wifi(wifi_credentials["ssid"], wifi_credentials["password"])
 
-except Exception:
-    # Either no wifi configuration file found, or something went wrong, 
-    # so go into setup mode.
-    setup_mode()
+                if is_connected_to_wifi():
+                    print(f"Connected to wifi, IP address {ip_address}")
+                    break
+                else:
+                    wifi_current_attempt += 1
+                    
+            if is_connected_to_wifi():
+                server = application_mode(ap_name)
+            else:
+                
+                # Bad configuration, delete the credentials file, reboot
+                # into setup mode to get new credentials from the user.
+                print("Bad wifi connection!")
+                print(wifi_credentials)
+                os.remove(WIFI_FILE)
+                machine_reset()
 
-# Start the web server...
-server.run()
+    except Exception:
+        # Either no wifi configuration file found, or something went wrong, 
+        # so go into setup mode.
+        print('starting in setup mode')
+        server = setup_mode(ap_domain, ap_name)
+
+    # Start the web server...
+    if server != None:
+        print('server is initialized')
+        server.run()
