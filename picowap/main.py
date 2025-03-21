@@ -73,7 +73,7 @@ def check(ap_domain, ap_name, max_attempts = WIFI_MAX_ATTEMPTS):
                 else:
                     wifi_current_attempt += 1
                     
-            if !is_connected_to_wifi():
+            if is_connected_to_wifi() == False:
                 # Bad configuration, delete the credentials file, reboot
                 # into setup mode to get new credentials from the user.
                 print("Bad wifi connection!")
